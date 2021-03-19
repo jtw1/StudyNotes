@@ -468,4 +468,249 @@ dir ./  #rdb文件保存的目录
 
 > replication复制
 
-p27  14.20
+
+
+> security
+
+可以在这里设置redis密码，默认是没有密码
+
+```bash
+config get requirepass  #获取redis密码
+config set requirepass "xxxxx"   #设置redis密码
+```
+
+
+
+> 限制clients
+
+```bash
+maxclients 10000    #设置能连接上redis的最大客户端数量
+maxmemory <bytes>   #配置最大的内存容量
+maxmemory-policy noeviction   #内存到达上限之后的处理策略
+   1 volatile-lru    只对设置了过期时间的key进行LRU
+   2 allkeys-lru     删除LRU算法的key
+   3 volatile-random 随即删除即将过期的key
+   4 allkeys-random   随即删除
+   5 volatile-ttl    删除即将过期的
+   6 noeviction      永不过期，返回错误
+```
+
+
+
+> append only模式  aof配置
+
+```bash
+appendonly no  #默认不开启aof模式，默认是使用rdb持久化，所以情况下，rdb完全够用
+appendfsync always   #每次修改都会sync，速度慢，消耗性能
+appendfsync everysec  #每秒执行一次sync，可能会丢失这一秒的数据
+appendfsync no        #不执行sync，这时操作系统自己同步数据，速度最快
+
+rewrite #重写
+# 重写规则说明  aof默认就是文件的无限追加，只会越来越大
+auto-aof-rewrite-percentage 100
+auto-aof-rewrite-min-size  64Mb    #如果aof文件大于64Mb，会fork一个新的进程将文件重写
+```
+
+
+
+
+
+
+
+## Redis持久化
+
+### RDB(Redis DataBase)
+
+> what is RDB
+
+主从复制中，rdb就是备用的
+
+![1616069339031](C:\Users\Administrator\AppData\Roaming\Typora\typora-user-images\1616069339031.png)
+
+在指定时间间隔内将内存中的数据集快照写入磁盘，也就是Snapshot快照，它恢复是将快照文件直接读到内存里
+
+Redis会单独创建(fork)一个子进程来进行持久化，先将数据写入到一个临时文件中，待持久化过程都结束了，在用这个临时文件替换上次持久化好的文件。
+
+整个过程中，主进程不进行任何IO操作，这就确保了极高的性能，如果需要进行**大规模的数据恢复**，且对于数据恢复的完整性不是非常敏感，那RDB方式要比AOF方式更加高效
+
+在生产环境下，备份
+
+**RDB的缺点是最后一次持久化后的数据可能丢失**，我们默认就是RDB，一般情况下不需要修改这个配置
+
+
+
+> 触发机制
+
+1. save的规则满足的情况下，会自动触发RDB规则
+2. 执行flushall命令，也会触发RDB规则
+3. 退出redis，也会产生rdb文件
+4. 备份也会自动生成一个dump.rdb文件
+
+> 如何恢复rdb文件
+
+1. 只需要将rdb文件放在Reids启动目录即可，redis启动时会自动检查dump.rdb，并回复其中的数据
+2. 查看需要存在的位置     `config get dir`
+
+> 优点
+
+1. 适合**大规模的数据恢复**
+2. 对数据的完整性要求不高
+
+> 缺点
+
+1. 需要一定时间间隔进程操作！如果Redis意外宕机，最后一次修改的数据就没有了
+2. fork进程时，会占用一定的内存空间
+
+
+
+
+
+### AOF(Append Only File)
+
+将所有命令都记录下来，恢复时就把这个文件全部再执行一遍
+
+> 是什么
+
+![1616069749312](C:\Users\Administrator\AppData\Roaming\Typora\typora-user-images\1616069749312.png)
+
+以日志的形式记录每个写操作，将Redis执行过的所有指令记录下来(读操作不记录)，只可以追加文件但是不可以修改文件，Redis启动之初会读取该文件重新构建数据，换言之，**Redis重启的话就根据日志文件的内容将写指令从前到后执行一次以完成数据的恢复**。
+
+**AOF保存的是appendonly.aof文件**
+
+默认是不开启的，如果开启的话需要手动配置！AOF只需要将配置文件中appendonly改为yes，就开启了AOF，重启redis生效（如果AOF文件有错误，Redis无法启动，redis有一个修复指令：`redis-check-aof --fix` aof文件名）
+
+
+
+> 优缺点
+
+优点：
+
+1. 每一次修改都同步，文件完整性更好
+2. 每秒同步一次，可能会丢失一秒的数据
+3. 从不同步，效率最高
+
+缺点：
+
+1. 相对于数据文件来说，aof文件大小远大于rdb，修复的速度也比rdb慢
+2. aof运行效率比rdb慢，所以redis默认配置就是rdb持久化！
+
+
+
+**扩展**
+
+![1616071312076](C:\Users\Administrator\AppData\Roaming\Typora\typora-user-images\1616071312076.png)
+
+![1616071334912](C:\Users\Administrator\AppData\Roaming\Typora\typora-user-images\1616071334912.png)
+
+## Redis发布订阅
+
+Redis发布订阅(pub/sub)是一种消息通信模式：发送者（pub）发送消息，订阅者接收消息
+
+![1616073406333](C:\Users\Administrator\AppData\Roaming\Typora\typora-user-images\1616073406333.png)
+
+
+
+> 原理
+
+Redis是用C实现的，通过分析Redis源码里面的publish.c文件，了解发布和订阅机制的底层实现。
+
+Redis通过publish,  subscribe,  psubscribe等命令实现发布和订阅功能
+
+通过subscribe命令订阅某频道后，redis-server里维护了一个字典，字典的键就是一个个的channel，而字典的值就是一个个链表，链表中保存了所有订阅这个channel的客户端，**subscribe命令的关键**，就是将客户端添加到给定channel的订阅链表中。
+
+通过publish命令向订阅者发送消息，redis-server会使用给定的频道作为键，在他维护的字典中查找记录订阅这个频道的所有客户端的链表，遍历这个链表，将消息发布给所有订阅者
+
+pub/sub从字面上理解就是发布和订阅，在redis中，你可以设定对某一个key值进行消息发布和消息订阅，当一个key值进行了消息发布之后，所有订阅他的客户端都会收到相应的消息。**这一功能最明显的用法**就是用作实时消息系统，如群聊，即时聊天等等
+
+> 使用场景
+
+1. 实时消息系统，实时聊天
+
+2. 订阅，关注系统
+
+   稍微复杂的场景要使用消息中间件(MQ,kafaka)
+
+
+
+## Redis主从复制
+
+> 概念
+
+是指将一台Redis服务器的数据，复制到其他的Redis服务器，前者称为主节点(master/leader)，后者称为从节点(slave/follower),**数据的复制是单向的，只能从主节点到从节点**，master以写为主，slave以读为主。
+
+默认情况下，每台redis服务器都是主节点，一个主节点可以有0个或多个从节点，但一个从节点只能有一个主节点。
+
+> 主从复制的作用
+
+1. 数据冗余：主从复制实现了数据的热备份，是持久化之外的一种数据冗余方式
+2. 故障恢复：当主节点出现问题时，可以由从节点提供服务，实现快速的故障恢复，实际上是一种服务的冗余
+3. 负载均衡：在主从复制的基础上，配合读写分离，可以由主节点提供写服务，从节点提供读服务（即写redis数据时应用连接主节点，读redis数据时应用连接从节点）分担服务器负载，尤其是在写少读多的情况下，通过多个从节点分担读负载，可以大大提高redis服务器的并发量
+4. 高可用（集群）基石：主从复制还是哨兵和集群能够实施的基础，因此是redis高可用的基石
+
+![1616075453181](C:\Users\Administrator\AppData\Roaming\Typora\typora-user-images\1616075453181.png)
+
+![1616075507379](C:\Users\Administrator\AppData\Roaming\Typora\typora-user-images\1616075507379.png)
+
+主从复制，读写分离  80%情况下都是在进行读操作，减缓服务器压力，架构中常用
+
+
+
+### 环境配置
+
+只配置从库，不配置主库
+
+复制配置文件，然后修改对应信息
+
+1. 端口
+2. pid名字
+3. log文件名字
+4. dump.rdb名字
+
+修改完毕之后，启动所有的redis服务器，可以通过进程信息查看
+
+
+
+> 主从复制原理
+
+slave启动成功连接到master后会发送一个sync同步命令
+
+master接到命令。启动后台的存盘进程，同时收集所有接收到的用于修改数据集命令，在后台进程执行完毕之后，**master将传送整个数据文件到slave，并完成一次完全同步**。
+
+**全量复制**：slave服务在接受到数据库文件数据后，将其存盘并加载到内存中
+
+**增量复制**：master继续将新的所有收集到的修改命令依次传给slave，完成同步
+
+但只要是重新连接到master，一次完全同步（全量复制）将被自动执行。数据一定可以在从机中看到
+
+
+
+如果主机断开了连接，可以使用`slaveof no one`让自己变成主机，其他的节点都可以手动连接到这个主节点
+
+
+
+### 哨兵模式
+
+> 哨兵模式（自动选举老大的模式）
+
+概述
+
+![1616136786415](C:\Users\Administrator\AppData\Roaming\Typora\typora-user-images\1616136786415.png)
+
+哨兵模式是一种特殊的模式，首先Redis提供了哨兵的命令，哨兵是一个独立的进程，作为进程，他会独立运行，**其原理是哨兵通过发送命令，等待redis服务器响应，从而监控运行多个redis实例**
+
+![1616136960414](C:\Users\Administrator\AppData\Roaming\Typora\typora-user-images\1616136960414.png)
+
+这里哨兵有两个作用
+
+- 通过发送命令让redis服务器返回监控其运行状态，包括主服务器和从服务器
+- 当哨兵监测到master宕机，会自动将slave切换成master·，然后通过发布订阅模式通知其他的从服务器，修改配置文件，让他们切换主机。
+
+然而一个哨兵进程对redis服务器进行监控，可能会出现问题，为此可以使用多个哨兵进行监控，各个哨兵之间还会进行监控，形成**多哨兵模式**
+
+![1616137383219](C:\Users\Administrator\AppData\Roaming\Typora\typora-user-images\1616137383219.png)
+
+![1616137413430](C:\Users\Administrator\AppData\Roaming\Typora\typora-user-images\1616137413430.png)
+
+
+
+p34 5:21
